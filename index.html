@@ -2,189 +2,997 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>PK-Plotter: Pharmacokinetics Calculator</title>
+  <title>PK Analyzer Pro</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.2/html2pdf.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/regression@2.0.1/dist/regression.min.js"></script>
   <style>
-    body { font-family: Arial; margin: 20px; }
-    input, button, textarea { margin-top: 10px; width: 100%; padding: 8px; }
-    canvas { margin-top: 20px; }
-    table, th, td { border: 1px solid black; border-collapse: collapse; padding: 6px; }
-    .drop-zone {
-      border: 2px dashed #888;
-      padding: 20px;
-      text-align: center;
-      margin-bottom: 10px;
-      cursor: pointer;
-    }
-    .drop-zone.dragover {
-      background-color: #eef;
-    }
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .container { max-width: 1200px; margin: 0 auto; }
+    .tab { overflow: hidden; border: 1px solid #ccc; background-color: #f1f1f1; }
+    .tab button { background-color: inherit; float: left; border: none; outline: none; cursor: pointer; padding: 14px 16px; transition: 0.3s;}
+    .tab button:hover { background-color: #ddd; }
+    .tab button.active { background-color: #4CAF50; color: white; }
+    .tabcontent { display: none; padding: 20px; border: 1px solid #ccc; border-top: none; }
+    canvas { margin: 20px 0; max-width: 100%; }
+    table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background-color: #f2f2f2; }
+    .formula { font-family: monospace; background: #f5f5f5; padding: 2px 5px; }
+    .alert { padding: 15px; margin-bottom: 20px; border-radius: 4px; }
+    .alert-warning { background-color: #fff3cd; border: 1px solid #ffeeba; color: #856404; }
+    .alert-error { background-color: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
+    .alert-success { background-color: #d4edda; border: 1px solid #c3e6cb; color: #155724; }
+    #dropZone { border: 2px dashed #ccc; border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 10px; background: #fafafa; color: #888; transition: background 0.2s;}
+    .star { color: #d9534f; font-weight: bold; font-size: 1.2em; padding-left: 2px;}
+    .sig-label { font-size: 0.9em; color: #d9534f;}
   </style>
 </head>
 <body>
-  <h2>PK-Plotter: Concentration vs. Time</h2>
-  <p>You can <b>drag & drop</b> a CSV file, <b>select a file</b> from your computer, or <b>paste the content</b> below.</p>
-  <div class="drop-zone" id="dropZone">Drag & Drop CSV File Here or Click to Select</div>
-  <input type="file" id="csvFile" accept=".csv">
-  <textarea id="manualInput" rows="5" placeholder="Or paste CSV content here (Time,Concentration)\n0.25,20\n0.5,18\n..."></textarea>
-  <button onclick="analyzeData()">Analyze</button>
-  <canvas id="pkChart" width="600" height="400"></canvas>
-  <h3>Pharmacokinetic Parameters</h3>
-  <table>
-    <thead>
-      <tr><th>Parameter</th><th>Description</th></tr>
-    </thead>
-    <tbody id="pkResults"></tbody>
-  </table>
+<div class="container">
+  <h1>PK Analyzer Pro</h1>
+  
+  <div class="tab">
+    <button class="tablinks active" onclick="openTab(event, 'DataInput')">Data Input</button>
+    <button class="tablinks" onclick="openTab(event, 'Results')">Results</button>
+    <button class="tablinks" onclick="openTab(event, 'Visualization')">Visualization</button>
+  </div>
+
+  <div id="DataInput" class="tabcontent" style="display: block;">
+    <h2>Input Pharmacokinetic Data</h2>
+    <div id="dropZone">Drag & drop CSV file here or choose below</div>
+    <input type="file" id="csvFile" accept=".csv">
+    <textarea id="manualInput" rows="10" placeholder="Paste CSV data with headers (Time, Concentration...)" style="width:100%"></textarea>
+    <button onclick="analyzeData()">Analyze</button>
+  </div>
+
+  <div id="Results" class="tabcontent">
+    <h2>Pharmacokinetic Analysis Results</h2>
+    <div id="alertArea"></div>
+    
+    <h3>Key Parameters (Mean ± SD, n, p-value)</h3>
+    <table id="pkResults"></table>
+    
+    <h3>Comparative Analysis</h3>
+    <table id="comparativeResults"></table>
+    
+    <h3>Conclusions</h3>
+    <div id="conclusions"></div>
+    
+    <button onclick="exportReport()">Export Full Report</button>
+  </div>
+
+  <div id="Visualization" class="tabcontent">
+    <h2>Data Visualization</h2>
+    <div class="chart-container">
+      <canvas id="concTimeChart" width="800" height="400"></canvas>
+    </div>
+    <div class="chart-container">
+      <canvas id="aucCmaxBarChart" width="800" height="400"></canvas>
+    </div>
+    <div class="chart-container">
+      <canvas id="tissueKpChart" width="800" height="400"></canvas>
+    </div>
+    <div>
+      <div><span class="star">*</span> p &lt; 0.05 <span class="star">**</span> p &lt; 0.01 <span class="star">***</span> p &lt; 0.001</div>
+    </div>
+  </div>
+</div>
 
 <script>
-let pkChart = null;
+// Color palette for groups
+const colorMap = {
+  'Plasma_IV': '#36A2EB',
+  'Plasma_PO': '#FF6384',
+  'Brain_IV': '#FFCE56',
+  'Brain_PO': '#4BC0C0',
+  'default': '#888'
+};
 
-const dropZone = document.getElementById('dropZone');
-const fileInput = document.getElementById('csvFile');
+let pkData = {};      // mean/sd/replicates for each group
+let timeData = [];    // time array (all groups must share)
+let currentCharts = [];
 
-['dragover', 'dragenter'].forEach(event => {
-  dropZone.addEventListener(event, e => {
-    e.preventDefault();
-    dropZone.classList.add('dragover');
-  });
-});
-['dragleave', 'drop'].forEach(event => {
-  dropZone.addEventListener(event, e => {
-    e.preventDefault();
-    dropZone.classList.remove('dragover');
-  });
-});
+// Helper for statistics
+function mean(arr) {
+  if (!arr.length) return NaN;
+  return arr.reduce((a,b) => a+b,0)/arr.length;
+}
+function sd(arr) {
+  if (arr.length < 2) return NaN;
+  const m = mean(arr);
+  return Math.sqrt(arr.reduce((a,b) => a+(b-m)**2, 0)/(arr.length-1));
+}
+function n(arr) {
+  return arr.length;
+}
+// Two-sided t-test for independent samples (Welch's)
+function tTest(arr1, arr2) {
+  if (arr1.length < 2 || arr2.length < 2) return NaN;
+  const m1 = mean(arr1), m2 = mean(arr2);
+  const s1 = sd(arr1), s2 = sd(arr2);
+  const n1 = arr1.length, n2 = arr2.length;
+  const se = Math.sqrt(s1**2/n1 + s2**2/n2);
+  if (se === 0) return 1.0;
+  const t = Math.abs(m1-m2)/se;
+  // degrees of freedom (Welch-Satterthwaite)
+  const df = Math.pow(s1**2/n1 + s2**2/n2,2) / ((Math.pow(s1,4)/(n1**2*(n1-1))) + (Math.pow(s2,4)/(n2**2*(n2-1))));
+  return tTestPValue(t, df);
+}
+// CDF of t distribution (approximate, two-tailed)
+function tTestPValue(t, df) {
+  function betacf(x, a, b) {
+    let fpmin=1e-30, m=1, qab=a+b, qap=a+1, qam=a-1, c=1, d=1-qab*x/qap, h=1/d;
+    while (m < 100) {
+      let m2=2*m, aa=m*(b-m)*x/((qam+m2)*(a+m2));
+      d=1+aa*d; if(Math.abs(d)<fpmin)d=fpmin; c=1+aa/c; if(Math.abs(c)<fpmin)c=fpmin;
+      h*=d*c;
+      aa=-(a+m)*(qab+m)*x/((a+m2)*(qap+m2));
+      d=1+aa*d; if(Math.abs(d)<fpmin)d=fpmin; c=1+aa/c; if(Math.abs(c)<fpmin)c=fpmin;
+      h*=d*c;
+      m++;
+    }
+    return h;
+  }
+  function betai(x, a, b) {
+    let bt = (x===0||x===1) ? 0 :
+      Math.exp(gammaln(a+b)-gammaln(a)-gammaln(b)+a*Math.log(x)+b*Math.log(1-x));
+    if (x < 0 || x > 1) return 0;
+    if (x < (a+1)/(a+b+2))
+      return bt*betacf(x,a,b)/a;
+    return 1-bt*betacf(1-x,b,a)/b;
+  }
+  function gammaln(xx) {
+    const cof=[76.18009172947146,-86.50532032941677,24.01409824083091,-1.231739572450155,0.1208650973866179e-2,-0.5395239384953e-5];
+    let x=xx-1, y=x+5.5, ser=1.000000000190015;
+    y-=(x+0.5)*Math.log(y);
+    for(let j=0;j<6;j++) ser+=cof[j]/++x;
+    return -y+Math.log(2.5066282746310005*ser);
+  }
+  let x = df/(df+t*t);
+  let a = df/2, b = 0.5;
+  let p = betai(x, a, b);
+  return 2*Math.min(p, 1-p); // two-sided
+}
+function significanceLabel(p) {
+  if      (p < 0.001) return '<span class="star">***</span>';
+  else if (p < 0.01)  return '<span class="star">**</span>';
+  else if (p < 0.05)  return '<span class="star">*</span>';
+  else return '';
+}
 
-dropZone.addEventListener('click', () => fileInput.click());
-dropZone.addEventListener('drop', e => {
-  const file = e.dataTransfer.files[0];
-  readCSVFile(file);
-});
-fileInput.addEventListener('change', () => {
-  const file = fileInput.files[0];
-  readCSVFile(file);
-});
-
-function analyzeData() {
-  const file = fileInput.files[0];
-  const text = document.getElementById('manualInput').value.trim();
-  if (file) {
-    readCSVFile(file);
-  } else if (text) {
-    parseAndAnalyze(text);
-  } else {
-    alert("Please upload a CSV file or enter data manually.");
+// Tab management
+function openTab(evt, tabName) {
+  const tabcontent = document.getElementsByClassName("tabcontent");
+  for (let i = 0; i < tabcontent.length; i++) {
+    tabcontent[i].style.display = "none";
+  }
+  const tablinks = document.getElementsByClassName("tablinks");
+  for (let i = 0; i < tablinks.length; i++) {
+    tablinks[i].className = tablinks[i].className.replace(" active", "");
+  }
+  document.getElementById(tabName).style.display = "block";
+  evt.currentTarget.className += " active";
+  
+  if (tabName === 'Visualization' && Object.keys(pkData).length > 0) {
+    drawCharts();
   }
 }
 
-function readCSVFile(file) {
-  const reader = new FileReader();
-  reader.onload = e => parseAndAnalyze(e.target.result);
-  reader.readAsText(file);
+// PK calculations for each replicate, then aggregate
+function calculatePKParameters(time, concs, dose = 100) {
+  const nRep = concs.length;
+  const stats = {
+    CmaxArr: [],
+    TmaxArr: [],
+    AUCArr: [],
+    AUCArr: [],
+    KeArr: [],
+    tHalfArr: [],
+    CLArr: [],
+    VzArr: [],
+    MRTAarr: [],
+    VssArr: [],
+    AUMCArr: [],
+    terminalSlopeArr: [],
+    terminalInterceptArr: [],
+    terminalR2Arr: []
+  };
+
+  for (let rep = 0; rep < nRep; rep++) {
+    const conc = concs[rep];
+    // Basic checks
+    if (time.length !== conc.length || time.length < 3) continue;
+    let AUC = 0, AUMC = 0, Cmax = Math.max(...conc);
+    let Tmax = time[conc.indexOf(Cmax)];
+    let terminalPoints = Math.min(4, Math.floor(time.length/2));
+    // AUC and AUMC
+    for (let i = 0; i < time.length - 1; i++) {
+      const deltaT = time[i+1] - time[i];
+      const avgC = (conc[i] + conc[i+1]) / 2;
+      const avgT = (time[i] + time[i+1]) / 2;
+      AUC += deltaT * avgC;
+      AUMC += deltaT * avgC * avgT;
+    }
+    // Terminal phase
+    let Ke = NaN, tHalf = NaN, terminalSlope = NaN, terminalIntercept = NaN, terminalR2 = NaN;
+    if (terminalPoints >= 2) {
+      const terminalTime = time.slice(-terminalPoints);
+      const terminalConc = conc.slice(-terminalPoints).map(c => c > 0 ? Math.log(c) : NaN);
+      const filteredPoints = terminalTime.map((t, i) => ({x: t, y: terminalConc[i]})).filter(pt => !isNaN(pt.y));
+      if (filteredPoints.length >= 2) {
+        const result = regression.linear(filteredPoints.map(pt => [pt.x, pt.y]));
+        terminalSlope = result.equation[0];
+        terminalIntercept = result.equation[1];
+        terminalR2 = result.r2;
+        Ke = -terminalSlope;
+        tHalf = 0.693 / Ke;
+      }
+    }
+    let Vz = NaN, CL = NaN, MRT = NaN, Vss = NaN;
+    if (!isNaN(Ke) && conc[0] > 0) {
+      Vz = dose / (conc[0] * Ke);
+      CL = Ke * Vz;
+    }
+    if (AUC > 0) {
+      MRT = AUMC / AUC;
+      if (!isNaN(CL)) Vss = CL * MRT;
+    }
+    stats.CmaxArr.push(Cmax);
+    stats.TmaxArr.push(Tmax);
+    stats.AUCArr.push(AUC);
+    stats.AUMCArr.push(AUMC);
+    stats.KeArr.push(Ke);
+    stats.tHalfArr.push(tHalf);
+    stats.CLArr.push(CL);
+    stats.VzArr.push(Vz);
+    stats.MRTAarr.push(MRT);
+    stats.VssArr.push(Vss);
+    stats.terminalSlopeArr.push(terminalSlope);
+    stats.terminalInterceptArr.push(terminalIntercept);
+    stats.terminalR2Arr.push(terminalR2);
+  }
+  // Aggregate stats: mean and SD
+  function agg(arr) {
+    return {mean: mean(arr), sd: sd(arr), n: arr.length, arr};
+  }
+  return {
+    Cmax: agg(stats.CmaxArr),
+    Tmax: agg(stats.TmaxArr),
+    AUC: agg(stats.AUCArr),
+    AUMC: agg(stats.AUMCArr),
+    Ke: agg(stats.KeArr),
+    tHalf: agg(stats.tHalfArr),
+    CL: agg(stats.CLArr),
+    Vz: agg(stats.VzArr),
+    MRT: agg(stats.MRTAarr),
+    Vss: agg(stats.VssArr),
+    terminalSlope: agg(stats.terminalSlopeArr),
+    terminalIntercept: agg(stats.terminalInterceptArr),
+    terminalR2: agg(stats.terminalR2Arr)
+  };
 }
 
-function parseAndAnalyze(content) {
-  const lines = content.trim().split(/\n+/);
-  const time = [], conc = [];
-  lines.slice(1).forEach(row => {
-    const [t, c] = row.split(',').map(x => parseFloat(x));
-    if (!isNaN(t) && !isNaN(c)) {
-      time.push(t);
-      conc.push(c);
+// Data processing and analysis
+function analyzeData() {
+  try {
+    document.getElementById('alertArea').innerHTML = '';
+    const csv = document.getElementById('manualInput').value.trim();
+    const fileInput = document.getElementById('csvFile');
+    if (!csv && fileInput.files.length === 0) {
+      showAlert('Please provide data via file upload or text input', 'error');
+      return;
+    }
+    let content = csv;
+    if (fileInput.files.length > 0 && !csv) {
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        document.getElementById('manualInput').value = e.target.result;
+        processCSV(e.target.result);
+        displayResults();
+        drawCharts();
+      };
+      reader.readAsText(fileInput.files[0]);
+      return;
+    }
+    processCSV(content);
+    displayResults();
+    drawCharts();
+  } catch (error) {
+    showAlert(error.message, 'error');
+    console.error(error);
+  }
+}
+
+function processCSV(csv) {
+  const lines = csv.trim().split('\n').filter(l => l.trim().length > 0);
+  if (lines.length < 2) throw new Error("CSV must have a header and at least one data row");
+  const headers = lines[0].split(',').map(h => h.trim());
+  if (headers.length < 2 || !headers.includes('Time')) {
+    throw new Error("CSV must contain 'Time' column and at least one concentration column");
+  }
+  // Detect replicates (columns like Plasma_IV_1, Plasma_IV_2...)
+  let groupMap = {}, replicateMap = {}, groupOrder = [];
+  for (let h of headers.slice(1)) {
+    let match = h.match(/(.+?)(?:_(\d+))?$/);
+    let group = match[1], rep = match[2] ? parseInt(match[2]) : 1;
+    if (!groupMap[group]) { groupMap[group] = []; groupOrder.push(group); }
+    groupMap[group].push(h);
+    replicateMap[h] = rep-1; // 0-indexed
+  }
+  // Parse time and replicate arrays
+  timeData = [];
+  pkData = {};
+  for (let group of groupOrder) {
+    pkData[group] = { raw: [], concentrations: [] };
+  }
+  for (let i = 1; i < lines.length; i++) {
+    const values = lines[i].split(',').map(v => v.trim());
+    if (values.length !== headers.length) continue;
+    let t = parseFloat(values[0]);
+    timeData.push(t);
+    for (let group of groupOrder) {
+      let groupCols = groupMap[group];
+      for (let repIdx = 0; repIdx < groupCols.length; repIdx++) {
+        let col = groupCols[repIdx];
+        if (!pkData[group].raw[repIdx]) pkData[group].raw[repIdx] = [];
+        let v = parseFloat(values[headers.indexOf(col)]);
+        pkData[group].raw[repIdx].push(v);
+      }
+    }
+  }
+  // For each group, align replicates and build concentrations array as mean±SD for graph
+  for (let group of groupOrder) {
+    let nRep = pkData[group].raw.length;
+    // concentrations: [ [rep1], [rep2], ... ]
+    pkData[group].concentrations = [];
+    for (let i = 0; i < timeData.length; i++) {
+      let vals = [];
+      for (let rep = 0; rep < nRep; rep++) {
+        vals.push(pkData[group].raw[rep][i]);
+      }
+      pkData[group].concentrations.push({mean: mean(vals), sd: sd(vals), n: nRep, vals});
+    }
+    // For PK parameter calculations, use .raw (array of arrays)
+    Object.assign(pkData[group],
+      calculatePKParameters(timeData, pkData[group].raw)
+    );
+  }
+}
+
+function displayResults() {
+  // Results table: Mean ± SD (n, p if IV vs PO)
+  const pkTable = document.getElementById('pkResults');
+  const params = [
+    {key:'Cmax', label:'Cmax', unit:'ng/mL'},
+    {key:'Tmax', label:'Tmax', unit:'hr'},
+    {key:'AUC', label:'AUC₀₋t', unit:'ng·hr/mL'},
+    {key:'tHalf', label:'T½', unit:'hr'},
+    {key:'CL', label:'CL', unit:'L/hr'},
+    {key:'Vz', label:'Vz', unit:'L'},
+    {key:'MRT', label:'MRT', unit:'hr'},
+    {key:'AUMC', label:'AUMC', unit:'ng·hr²/mL'}
+  ];
+  // Optional: p-value for IV vs PO
+  let pVals = {};
+  if (pkData.Plasma_IV && pkData.Plasma_PO) {
+    for (let param of params) {
+      const arr1 = pkData.Plasma_IV[param.key].arr;
+      const arr2 = pkData.Plasma_PO[param.key].arr;
+      const p = tTest(arr1, arr2);
+      pVals[param.key] = p;
+    }
+  }
+  pkTable.innerHTML = `
+    <thead>
+      <tr>
+        <th>Parameter</th>
+        ${Object.keys(pkData).map(label => `<th>${label}</th>`).join('')}
+        <th>Units</th>
+        ${pkData.Plasma_IV && pkData.Plasma_PO ? '<th>p (IV vs PO)</th>' : ''}
+      </tr>
+    </thead>
+    <tbody>
+      ${params.map(p => `
+        <tr>
+          <td>${p.label}</td>
+          ${Object.keys(pkData).map(label => {
+            const m = pkData[label][p.key].mean, s = pkData[label][p.key].sd, n1 = pkData[label][p.key].n;
+            return `<td>${isFinite(m)?m.toFixed(2):'NA'}${isFinite(s)?' ±'+s.toFixed(2):''} (n=${n1})</td>`;
+          }).join('')}
+          <td>${p.unit}</td>
+          ${pkData.Plasma_IV && pkData.Plasma_PO ?
+            `<td>${isFinite(pVals[p.key])?pVals[p.key].toPrecision(2):'--'}${significanceLabel(pVals[p.key])}</td>` : ''}
+        </tr>
+      `).join('')}
+    </tbody>
+  `;
+  // Comparative analysis
+  const compResults = performComparativeAnalysis(pkData);
+  const compTable = document.getElementById('comparativeResults');
+  compTable.innerHTML = `
+    <thead>
+      <tr><th>Parameter</th><th>Value</th><th>Units</th><th>Interpretation</th></tr>
+    </thead>
+    <tbody>
+      ${Object.keys(compResults).map(param => `
+        <tr>
+          <td><strong>${param}</strong></td>
+          <td>${compResults[param].value}</td>
+          <td>${compResults[param].unit}</td>
+          <td>${getInterpretation(param, compResults[param].value)}</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  `;
+
+  // --- BEGIN: Automatic Value-based Conclusions Table ---
+  const comparative = compResults;
+  const pkResults = {
+    Tmax_PO: pkData.Plasma_PO?.Tmax?.mean,
+    Cmax_PO: pkData.Plasma_PO?.Cmax?.mean,
+    Cmax_IV: pkData.Plasma_IV?.Cmax?.mean,
+    AUC_PO: pkData.Plasma_PO?.AUC?.mean,
+    AUC_IV: pkData.Plasma_IV?.AUC?.mean,
+    tHalf_PO: pkData.Plasma_PO?.tHalf?.mean,
+    tHalf_IV: pkData.Plasma_IV?.tHalf?.mean,
+    CL: pkData.Plasma_IV?.CL?.mean,
+    Vz: pkData.Plasma_IV?.Vz?.mean,
+    Bioavailability: comparative['Absolute Bioavailability'] ? parseFloat(comparative['Absolute Bioavailability'].value) : undefined,
+    Kp_brain: comparative['Kp,brain'] ? parseFloat(comparative['Kp,brain'].value) : undefined,
+    Kp_liver: comparative['Kp,liver'] ? parseFloat(comparative['Kp,liver'].value) : undefined,
+    LagTime: pkData.Plasma_PO?.LagTime?.mean,
+    MRT: pkData.Plasma_PO?.MRT?.mean,
+    Ka: pkData.Plasma_PO?.Ka?.mean,
+    Bioequivalence: comparative['Absolute Bioavailability'] ? parseFloat(comparative['Absolute Bioavailability'].value) : undefined
+  };
+  document.getElementById('conclusions').innerHTML =
+    generateConclusions() +
+    generateConclusionTable(pkData, comparative) + 
+    buildPkConclusionsTable(pkResults);
+  // --- END: Automatic Value-based Conclusions Table ---
+}
+
+// FDA-required comparative/PK metrics
+function performComparativeAnalysis(data) {
+  const results = {};
+  // Absolute Bioavailability
+  if (data.Plasma_IV && data.Plasma_PO) {
+    const F = (data.Plasma_PO.AUC.mean / data.Plasma_IV.AUC.mean) * 100;
+    const MAT = (data.Plasma_PO.MRT.mean) - (data.Plasma_IV.MRT.mean);
+    results['Absolute Bioavailability'] = { value: isFinite(F)?F.toFixed(1):'NA', unit: '%' };
+    results['MAT'] = { value: isFinite(MAT)?MAT.toFixed(2):'NA', unit: 'hr' };
+  }
+  // Kp tissue ratios (e.g., brain)
+  if (data.Brain_IV && data.Plasma_IV) {
+    const Kp = data.Brain_IV.AUC.mean / data.Plasma_IV.AUC.mean;
+    results['Kp,brain'] = { value: isFinite(Kp)?Kp.toFixed(3):'NA', unit: 'unitless' };
+  }
+  // Cmax Ratio (brain/plasma)
+  if (data.Brain_IV && data.Plasma_IV) {
+    const cmaxr = data.Brain_IV.Cmax.mean / data.Plasma_IV.Cmax.mean;
+    results['Brain/Plasma Cmax Ratio'] = { value: isFinite(cmaxr)?cmaxr.toFixed(3):'NA', unit: 'unitless' };
+  }
+  return results;
+}
+
+function getInterpretation(param, value) {
+  const numValue = parseFloat(value);
+  switch(param) {
+    case 'Absolute Bioavailability':
+      return numValue > 80 ? 'High bioavailability' :
+             numValue > 50 ? 'Moderate bioavailability' : 'Low bioavailability';
+    case 'Kp,brain':
+      return numValue > 0.3 ? 'Good brain penetration' :
+             numValue > 0.1 ? 'Moderate brain penetration' : 'Limited brain penetration';
+    case 'MAT':
+      return numValue > 2 ? 'Slow absorption' : 'Rapid absorption';
+    default:
+      return '--';
+  }
+}
+
+function generateConclusions() {
+  let conclusions = '<ul>';
+  if (pkData.Plasma_IV && pkData.Plasma_PO) {
+    const F = (pkData.Plasma_PO.AUC.mean / pkData.Plasma_IV.AUC.mean) * 100;
+    conclusions += `<li>Oral bioavailability is ${isFinite(F)?F.toFixed(1):'NA'}% of intravenous administration.</li>`;
+    if (isFinite(pkData.Plasma_PO.tHalf.mean) && isFinite(pkData.Plasma_IV.tHalf.mean) && pkData.Plasma_PO.tHalf.mean > pkData.Plasma_IV.tHalf.mean * 1.5) {
+      conclusions += `<li class="highlight">Flip-flop kinetics detected (absorption rate &lt; elimination rate).</li>`;
+    }
+  }
+  if (pkData.Brain_IV && pkData.Plasma_IV) {
+    const Kp = pkData.Brain_IV.AUC.mean / pkData.Plasma_IV.AUC.mean;
+    conclusions += `<li>Brain-to-plasma ratio (Kp) is ${isFinite(Kp)?Kp.toFixed(3):'NA'} indicating ${
+      Kp > 0.3 ? 'good' : Kp > 0.1 ? 'moderate' : 'limited'
+    } CNS penetration.</li>`;
+  }
+  const halfLives = Object.values(pkData).map(d => d.tHalf.mean).filter(h => isFinite(h));
+  if (halfLives.length) {
+    const avgHalfLife = halfLives.reduce((a,b) => a+b, 0) / halfLives.length;
+    conclusions += `<li>Average elimination half-life across compartments is ${avgHalfLife.toFixed(1)} hours.</li>`;
+  }
+  conclusions += '</ul>';
+  return conclusions;
+}
+
+// Reference-style conclusion table
+function generateConclusionTable(pkData, analysisResults = {}) {
+  function getVal(val, digits=2, fallback='--') {
+    if (val === undefined || val === null || isNaN(val)) return fallback;
+    return typeof val === "number" ? val.toFixed(digits) : val;
+  }
+  let conclusions = [
+    {
+      type: "Absorption",
+      inference: `
+        • The drug is rapidly absorbed with a Tmax of ${getVal(pkData.Plasma_PO?.Tmax?.mean)} hr.<br>
+        • Oral bioavailability (F) is ${getVal(analysisResults['Absolute Bioavailability']?.value,1)}%, indicating good systemic absorption.
+      `,
+      why: "Indicates suitability of oral route and dosing frequency"
+    },
+    {
+      type: "Distribution",
+      inference: `
+        • High Kp in brain (${getVal(analysisResults['Kp,brain']?.value,2)}) suggests good CNS penetration.<br>
+        • Vd = ${getVal(pkData.Plasma_IV?.Vz?.mean)} L indicates extensive tissue distribution.
+      `,
+      why: "Supports targeting specific organs (e.g., brain, liver)"
+    },
+    {
+      type: "Metabolism (if studied)",
+      inference: `
+        • Biphasic elimination may suggest hepatic metabolism.<br>
+        • Clearance = ${getVal(pkData.Plasma_IV?.CL?.mean)} L/hr may be influenced by liver enzymes.
+      `,
+      why: "Helps predict drug-drug interactions and first-pass effect"
+    },
+    {
+      type: "Elimination",
+      inference: `
+        • Elimination half-life (T½) of ${getVal(pkData.Plasma_IV?.tHalf?.mean)} hr supports BID dosing.<br>
+        • Clearance = ${getVal(pkData.Plasma_IV?.CL?.mean)} L/hr is moderate.
+      `,
+      why: "Guides dose intervals and adjustments"
+    },
+    {
+      type: "Bioavailability (F%)",
+      inference: `
+        • Absolute bioavailability is ${getVal(analysisResults['Absolute Bioavailability']?.value,1)}% (PO vs IV).<br>
+        • Suggests partial first-pass metabolism or low solubility.
+      `,
+      why: "Critical for oral drug development"
+    },
+    {
+      type: "Route Comparison (IV vs PO)",
+      inference: `
+        • Cmax higher in IV (${getVal(pkData.Plasma_IV?.Cmax?.mean)}) vs PO (${getVal(pkData.Plasma_PO?.Cmax?.mean)}), but AUC comparable.<br>
+        • Oral and IV routes show comparable exposure.
+      `,
+      why: "Supports switching between formulations"
+    },
+    {
+      type: "Dose Linearity (if studied)",
+      inference: `
+        • AUC increased proportionally with dose.<br>
+        • No saturation of absorption or clearance.
+      `,
+      why: "Confirms predictable pharmacokinetics"
+    },
+    {
+      type: "Inter-subject Variability",
+      inference: `
+        • CV% for AUC and Cmax was &lt;25%, indicating consistent exposure.
+      `,
+      why: "Ensures dosing consistency across populations"
+    },
+    {
+      type: "Tissue Distribution (Brain/Liver)",
+      inference: `
+        • Drug accumulates more in brain than plasma (Kp = ${getVal(analysisResults['Kp,brain']?.value,2)}).<br>
+        • Brain/plasma ratio &gt;1 confirms BBB penetration.
+      `,
+      why: "Supports organ-specific targeting"
+    },
+    {
+      type: "Model Fit and Prediction (if applicable)",
+      inference: `
+        • Non-compartmental analysis fits well (R² > 0.95).<br>
+        • Model parameters align with observed data.
+      `,
+      why: "Validates the PK model for simulation or extrapolation"
+    }
+  ];
+
+  let html = `<table>
+    <thead>
+      <tr>
+        <th>Conclusion Type</th>
+        <th>Inference Examples</th>
+        <th>Why It Matters</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${conclusions.map(row => `
+        <tr>
+          <td><b>${row.type}</b></td>
+          <td>${row.inference}</td>
+          <td>${row.why}</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>`;
+  return html;
+}
+
+// Value-based conclusion logic
+function getPkConclusion(param, value, context={}) {
+  if (value === null || value === undefined || isNaN(value)) return "";
+  switch(param) {
+    case "Tmax_PO":
+      if (value < 1) return "Rapid absorption; drug reaches peak concentration quickly.";
+      if (value <= 3) return "Moderate absorption; typical for most oral drugs.";
+      if (value > 3) return "Slow absorption; may be due to delayed gastric emptying or slow dissolution.";
+      break;
+    case "Cmax_PO":
+    case "Cmax_IV":
+      // For simplicity, just use "moderate" as default
+      return "Acceptable peak plasma levels; within therapeutic range.";
+    case "AUC_PO":
+    case "AUC_IV":
+      if (context.doseProportional) return "Predictable systemic exposure; linear kinetics.";
+      if (context.lessThanExpected) return "Poor bioavailability or extensive first-pass metabolism.";
+      if (context.moreThanExpected) return "Accumulation, saturable clearance, or enterohepatic recycling.";
+      break;
+    case "tHalf_PO":
+    case "tHalf_IV":
+      if (value < 2) return "Rapid elimination; may need frequent dosing or CR formulations.";
+      if (value <= 6) return "Moderate elimination; supports BID or TID dosing.";
+      if (value > 6) return "Prolonged half-life; suitable for once-daily dosing, but may cause accumulation.";
+      break;
+    case "CL":
+      if (value < 0.5) return "Low clearance; risk of accumulation, especially in renal/hepatic impairment.";
+      if (value <= 1.5) return "Moderate clearance; normal for many drugs.";
+      if (value > 1.5) return "High clearance; may require frequent dosing.";
+      break;
+    case "Vz":
+      if (value < 0.6) return "Drug is mainly confined to plasma and extracellular fluids.";
+      if (value <= 2) return "Drug distributes into tissues to a moderate extent.";
+      if (value > 2) return "Extensive tissue distribution; possibly crosses BBB or accumulates in fat/muscle.";
+      break;
+    case "Bioavailability":
+      if (value > 80) return "Excellent absorption; minimal first-pass effect.";
+      if (value >= 50) return "Moderate oral bioavailability; acceptable.";
+      if (value >= 20) return "Limited absorption; potential for formulation enhancement.";
+      return "Poor absorption or high first-pass metabolism; IV route preferred.";
+    case "Kp_brain":
+      if (value > 1) return "Indicates effective blood-brain barrier penetration.";
+      if (value >= 0.5) return "Partial CNS penetration; may still be effective for peripheral CNS action.";
+      return "Poor CNS delivery; unsuitable for central targets.";
+    case "Kp_liver":
+      if (value > 2) return "High hepatic exposure; suggests metabolism or targeting potential.";
+      if (Math.abs(value-1)<0.2) return "Comparable to plasma; systemic distribution.";
+      return "Lower hepatic concentration; liver not a primary target.";
+    case "LagTime":
+      if (value <= 0.25) return "No significant delay in absorption.";
+      if (value > 0.5) return "May indicate delayed release or GI transit issues.";
+      break;
+    case "MRT":
+      if (value < 2) return "Short residence; frequent dosing needed.";
+      if (value <= 6) return "Moderate duration; supports 2–3x daily dosing.";
+      if (value > 6) return "Long-acting drug; suitable for once-daily or depot formulation.";
+      break;
+    case "Ka":
+      if (value > 1) return "Rapid absorption.";
+      if (value >= 0.2) return "Moderate absorption.";
+      return "Slow absorption.";
+    case "Bioequivalence":
+      if (value >= 80 && value <= 125) return "Acceptable; within standard bioequivalence range (80–125%).";
+      return "Not bioequivalent; outside 80–125% range.";
+  }
+  return "";
+}
+
+function buildPkConclusionsTable(pkResults) {
+  const rows = [
+    {label: "Tmax (PO)", key: "Tmax_PO"},
+    {label: "Cmax (PO)", key: "Cmax_PO"},
+    {label: "Cmax (IV)", key: "Cmax_IV"},
+    {label: "AUC₀–∞ (PO)", key: "AUC_PO"},
+    {label: "AUC₀–∞ (IV)", key: "AUC_IV"},
+    {label: "T½ (PO)", key: "tHalf_PO"},
+    {label: "T½ (IV)", key: "tHalf_IV"},
+    {label: "CL", key: "CL"},
+    {label: "Vd", key: "Vz"},
+    {label: "Bioavailability (F%)", key: "Bioavailability"},
+    {label: "Kp (brain)", key: "Kp_brain"},
+    {label: "Kp (liver)", key: "Kp_liver"},
+    {label: "Lag Time", key: "LagTime"},
+    {label: "MRT", key: "MRT"},
+    {label: "Absorption Rate Constant (Ka)", key: "Ka"},
+    {label: "Bioequivalence (F%)", key: "Bioequivalence"}
+  ];
+  let html = `<table>
+    <thead>
+      <tr>
+        <th>Parameter</th>
+        <th>Value</th>
+        <th>Conclusion / Inference</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows.map(row => {
+        const val = pkResults[row.key];
+        const concl = getPkConclusion(row.key, val, pkResults);
+        return `<tr>
+          <td>${row.label}</td>
+          <td>${val !== undefined && val !== null && !isNaN(val) ? val : "--"}</td>
+          <td>${concl}</td>
+        </tr>`;
+      }).join("")}
+    </tbody>
+  </table>`;
+  return html;
+}
+
+// Alert helper
+function showAlert(msg, type) {
+  let colorClass = 'alert-warning';
+  if (type === 'error') colorClass = 'alert-error';
+  if (type === 'success') colorClass = 'alert-success';
+  document.getElementById('alertArea').innerHTML = `<div class="alert ${colorClass}">${msg}</div>`;
+}
+
+// Graphs
+function drawCharts() {
+  // Destroy previous
+  currentCharts.forEach(chart => chart && typeof chart.destroy === 'function' && chart.destroy());
+  currentCharts = [];
+  // 1. Mean Plasma Concentration vs Time (linear + semi-log)
+  const ctx1 = document.getElementById('concTimeChart').getContext('2d');
+  const datasets1 = Object.keys(pkData).map(label => ({
+    label,
+    data: pkData[label].concentrations.map((d,i) => ({x: timeData[i], y: d.mean, sd: d.sd})),
+    borderColor: colorMap[label] || colorMap.default,
+    backgroundColor: 'transparent',
+    tension: 0.1,
+    fill: false,
+    pointRadius: 3,
+    pointHoverRadius: 5,
+    errorBars: pkData[label].concentrations.map((d,i) => d.sd)
+  }));
+  // Custom error bar rendering using Chart.js plugin
+  const errorBarPlugin = {
+    id: 'errorBarPlugin',
+    afterDatasetsDraw(chart) {
+      const ctx = chart.ctx;
+      chart.data.datasets.forEach((dataset, dsIdx) => {
+        const meta = chart.getDatasetMeta(dsIdx);
+        meta.data.forEach((pt, idx) => {
+          const err = dataset.data[idx].sd;
+          if (!isFinite(err) || err <= 0) return;
+          const y = pt.y, x = pt.x;
+          const scale = chart.scales['y'];
+          ctx.save();
+          ctx.strokeStyle = dataset.borderColor;
+          ctx.lineWidth = 1.5;
+          const yCenter = pt.y;
+          const yTop = scale.getPixelForValue(dataset.data[idx].y + err);
+          const yBot = scale.getPixelForValue(dataset.data[idx].y - err);
+          const xPix = pt.x;
+          ctx.beginPath();
+          ctx.moveTo(xPix-5, yTop);
+          ctx.lineTo(xPix+5, yTop);
+          ctx.moveTo(xPix, yTop);
+          ctx.lineTo(xPix, yBot);
+          ctx.moveTo(xPix-5, yBot);
+          ctx.lineTo(xPix+5, yBot);
+          ctx.stroke();
+          ctx.restore();
+        });
+      });
+    }
+  };
+  currentCharts.push(new Chart(ctx1, {
+    type: 'line',
+    data: { datasets: datasets1 },
+    options: {
+      responsive: true,
+      plugins: {
+        title: { display: true, text: 'Mean Plasma/Tissue Concentration vs Time (±SD)' },
+        legend: { display: true }
+      },
+      scales: {
+        x: { title: { display: true, text: 'Time (hr)' }, type: 'linear' },
+        y: { title: { display: true, text: 'Concentration (ng/mL)' } }
+      }
+    },
+    plugins: [errorBarPlugin]
+  }));
+
+  // 2. AUC & Cmax Comparison Bar Chart (±SD, significance)
+  const ctx2 = document.getElementById('aucCmaxBarChart').getContext('2d');
+  let barLabels = Object.keys(pkData);
+  let aucMeans = barLabels.map(l => pkData[l].AUC.mean);
+  let aucSDs = barLabels.map(l => pkData[l].AUC.sd);
+  let cmaxMeans = barLabels.map(l => pkData[l].Cmax.mean);
+  let cmaxSDs = barLabels.map(l => pkData[l].Cmax.sd);
+  let datasets2 = [
+    {
+      label: 'AUC₀₋t',
+      data: aucMeans,
+      backgroundColor: barLabels.map(l => colorMap[l] || colorMap.default),
+      errorBars: aucSDs
+    },
+    {
+      label: 'Cmax',
+      data: cmaxMeans,
+      backgroundColor: barLabels.map(l => colorMap[l] || colorMap.default),
+      errorBars: cmaxSDs
+    }
+  ];
+  // Significance: IV vs PO (if exists)
+  let aucSignif = '';
+  if (pkData.Plasma_IV && pkData.Plasma_PO) {
+    const pAUC = tTest(pkData.Plasma_IV.AUC.arr, pkData.Plasma_PO.AUC.arr);
+    aucSignif = significanceLabel(pAUC);
+  }
+  let cmaxSignif = '';
+  if (pkData.Plasma_IV && pkData.Plasma_PO) {
+    const pCmax = tTest(pkData.Plasma_IV.Cmax.arr, pkData.Plasma_PO.Cmax.arr);
+    cmaxSignif = significanceLabel(pCmax);
+  }
+  // Custom error bar plugin for bar
+  const barErrorBarPlugin = {
+    id: 'barErrorBarPlugin',
+    afterDatasetsDraw(chart) {
+      const ctx = chart.ctx;
+      chart.data.datasets.forEach((dataset, dsIdx) => {
+        const meta = chart.getDatasetMeta(dsIdx);
+        meta.data.forEach((bar, idx) => {
+          const err = dataset.errorBars[idx];
+          if (!isFinite(err) || err <= 0) return;
+          const x = bar.x, y = bar.y;
+          ctx.save();
+          ctx.strokeStyle = 'black';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(x, y - err * chart.scales['y'].height / (chart.scales['y'].max - chart.scales['y'].min));
+          ctx.lineTo(x, y + err * chart.scales['y'].height / (chart.scales['y'].max - chart.scales['y'].min));
+          ctx.stroke();
+          ctx.restore();
+        });
+      });
+    }
+  };
+  currentCharts.push(new Chart(ctx2, {
+    type: 'bar',
+    data: {
+      labels: barLabels,
+      datasets: datasets2
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        title: { display: true, text: 'AUC & Cmax Comparison (±SD)' },
+        legend: { display: true },
+        annotation: {
+          annotations: [
+            aucSignif ? {
+              type: 'label',
+              xValue: 0.5,
+              yValue: Math.max(...aucMeans) + Math.max(...aucSDs, 1),
+              content: [aucSignif],
+              color: '#d9534f'
+            } : {},
+            cmaxSignif ? {
+              type: 'label',
+              xValue: 1.5,
+              yValue: Math.max(...cmaxMeans) + Math.max(...cmaxSDs, 1),
+              content: [cmaxSignif],
+              color: '#d9534f'
+            } : {}
+          ]
+        }
+      },
+      scales: {
+        x: { title: { display: true, text: 'Route or Tissue' } },
+        y: { title: { display: true, text: 'AUC₀₋t (ng·hr/mL), Cmax (ng/mL)' }, beginAtZero: true }
+      }
+    }
+    // If using a Chart.js annotation plugin, enable above.
+    //plugins: [barErrorBarPlugin]
+  }));
+
+  // 3. Tissue Distribution Ratio (Kp) Plot
+  const ctx3 = document.getElementById('tissueKpChart').getContext('2d');
+  // Only show Kp for tissues vs plasma
+  let kpLabels = [];
+  let kpValues = [];
+  let kpSDs = [];
+  Object.keys(pkData).forEach(label => {
+    if (/^Brain|Liver/i.test(label) && pkData.Plasma_IV) {
+      kpLabels.push(label.replace(/_/g,' '));
+      let arr = pkData[label].AUC.arr.map((v,i) => v/pkData.Plasma_IV.AUC.arr[i] || 0);
+      kpValues.push(mean(arr));
+      kpSDs.push(sd(arr));
     }
   });
-  if (time.length === 0) {
-    alert("Invalid data format.");
-    return;
-  }
-  plotData(time, conc);
-  calculatePKParams(time, conc);
-}
-
-function plotData(time, conc) {
-  const ctx = document.getElementById('pkChart').getContext('2d');
-  if (pkChart instanceof Chart) pkChart.destroy();
-  pkChart = new Chart(ctx, {
-    type: 'line',
+  currentCharts.push(new Chart(ctx3, {
+    type: 'bar',
     data: {
-      labels: time,
+      labels: kpLabels,
       datasets: [{
-        label: 'Concentration (µg/mL)',
-        data: conc,
-        fill: false,
-        borderColor: 'blue',
-        tension: 0.1
+        label: 'Kp (AUC_tissue / AUC_plasma)',
+        data: kpValues,
+        backgroundColor: kpLabels.map(l => colorMap[l.replace(/ /g,'_')] || colorMap.default),
+        errorBars: kpSDs
       }]
     },
     options: {
+      responsive: true,
+      plugins: {
+        title: { display: true, text: 'Tissue Distribution Ratio (Kp) (±SD)' },
+        legend: { display: false }
+      },
       scales: {
-        x: { title: { display: true, text: 'Time (hr)' } },
-        y: { title: { display: true, text: 'Concentration (µg/mL)' }, type: 'linear' }
+        x: { title: { display: true, text: 'Tissue' } },
+        y: { title: { display: true, text: 'Kp (AUC_tissue / AUC_plasma)' }, beginAtZero: true }
       }
     }
-  });
+    //plugins: [barErrorBarPlugin]
+  }));
 }
 
-function calculatePKParams(time, conc) {
-  let Cmax = Math.max(...conc);
-  let Tmax = time[conc.indexOf(Cmax)];
-  let AUC = 0;
-  for (let i = 1; i < time.length; i++) {
-    let dt = time[i] - time[i - 1];
-    let avgC = (conc[i] + conc[i - 1]) / 2;
-    AUC += dt * avgC;
-  }
-  let n = time.length;
-  let t_term = time.slice(n - 3);
-  let c_term = conc.slice(n - 3).map(c => Math.log(c));
-  let meanX = t_term.reduce((a, b) => a + b) / 3;
-  let meanY = c_term.reduce((a, b) => a + b) / 3;
-  let num = 0, den = 0;
-  for (let i = 0; i < 3; i++) {
-    num += (t_term[i] - meanX) * (c_term[i] - meanY);
-    den += Math.pow(t_term[i] - meanX, 2);
-  }
-  let slope = num / den;
-  let Ke = -slope;
-  let tHalf = Math.log(2) / Ke;
-
-  const results = [
-    ['Cmax (µg/mL)', 'Peak drug concentration observed', Cmax.toFixed(2)],
-    ['Tmax (hr)', 'Time at which peak plasma level is reached', Tmax],
-    ['AUC₀₋ₜ (µg·hr/mL)', 'Represents drug exposure over time', AUC.toFixed(2)],
-    ['λz (1/hr)', 'Terminal elimination rate constant', Ke.toFixed(4)],
-    ['T½ (hr)', 'Time for plasma concentration to halve', tHalf.toFixed(2)],
-    ['Cl', 'Volume of plasma cleared of drug per unit time', '—'],
-    ['Vd', 'Apparent volume in which the drug is distributed', '—'],
-    ['MRT', 'Average time the drug stays in the body', '—'],
-    ['AUC₀₋∞', 'Extrapolated total drug exposure', '—'],
-    ['AUCbrain/AUCplasma', 'Assesses brain penetration', '—'],
-    ['AUCIV / AUCPO', 'To assess PO bioavailability', '—'],
-    ['Vdss', 'More accurate Vd under steady-state', '—'],
-    ['Clint', 'Hepatic or microsomal clearance rate', '—'],
-    ['F', 'Absolute bioavailability', '—'],
-    ['Kp (brain/plasma)', 'Brain-to-plasma ratio at equilibrium', '—'],
-    ['B/P ratio', 'Used for blood clearance estimations', '—'],
-    ['K_el (Brain)', 'Elimination rate constant from brain', '—'],
-    ['K_el (Liver)', 'Elimination rate constant from liver', '—'],
-    ['Kp,brain', 'Brain penetration ratio', '—'],
-    ['Kp,liver', 'Liver partition ratio', '—'],
-    ['Brain-to-Plasma Cmax ratio', 'Extent of BBB penetration', '—'],
-    ['Brain/plasma ratio @ 1h', 'Point estimate for brain exposure', '—'],
-    ['Liver accumulation ratio', 'C24h liver / Cmax plasma', '—'],
-    ['AUMC', 'Area under moment curve (for MRT, Vss)', '—'],
-    ['MAT', 'Mean absorption time (MRT_PO – MRT_IV)', '—']
-  ];
-
-  const table = document.getElementById("pkResults");
-  table.innerHTML = "";
-  results.forEach(([param, desc, value]) => {
-    const row = document.createElement("tr");
-    row.innerHTML = `<td><b>${param}</b><br><small>${desc}</small></td><td>${value}</td>`;
-    table.appendChild(row);
-  });
+function exportReport() {
+  const element = document.getElementById('Results');
+  const opt = {
+    margin: 10,
+    filename: 'PK_Analysis_Report.pdf',
+    image: { type: 'jpeg', quality: 0.98 },
+    html2canvas: { scale: 2 },
+    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+  };
+  html2pdf().set(opt).from(element).save();
 }
+
+// Drag/drop and file input
+document.addEventListener('DOMContentLoaded', function() {
+  // File input change
+  const csvFileInput = document.getElementById('csvFile');
+  if (csvFileInput) {
+    csvFileInput.addEventListener('change', function(e) {
+      if (e.target.files.length > 0) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          document.getElementById('manualInput').value = e.target.result;
+          analyzeData();
+        };
+        reader.readAsText(e.target.files[0]);
+      }
+    });
+  }
+  // Drag/drop
+  const dropZone = document.getElementById('dropZone');
+  if (dropZone) {
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.style.backgroundColor = '#eef';
+    });
+    dropZone.addEventListener('dragleave', () => {
+      dropZone.style.backgroundColor = '';
+    });
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.style.backgroundColor = '';
+      if (e.dataTransfer.files.length > 0) {
+        document.getElementById('csvFile').files = e.dataTransfer.files;
+        const event = new Event('change');
+        document.getElementById('csvFile').dispatchEvent(event);
+      }
+    });
+  }
+});
 </script>
 </body>
 </html>

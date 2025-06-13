@@ -9,40 +9,103 @@
     input, button, textarea { margin-top: 10px; width: 100%; padding: 8px; }
     canvas { margin-top: 20px; }
     table, th, td { border: 1px solid black; border-collapse: collapse; padding: 6px; }
+    .drop-zone {
+      border: 2px dashed #888;
+      padding: 20px;
+      text-align: center;
+      margin-bottom: 10px;
+      cursor: pointer;
+    }
+    .drop-zone.dragover {
+      background-color: #eef;
+    }
   </style>
 </head>
 <body>
   <h2>PK-Plotter: Concentration vs. Time</h2>
-  <label>Enter Time and Concentration (CSV Format - Time,Conc):</label>
-  <textarea id="dataInput" rows="8">0,20\n1,15\n2,10\n4,5\n6,2\n8,1</textarea>
-  <button onclick="analyzePK()">Analyze</button>
+  <p>You can <b>drag & drop</b> a CSV file, <b>select a file</b> from your computer, or <b>paste the content</b> below.</p>
+  <div class="drop-zone" id="dropZone">Drag & Drop CSV File Here or Click to Select</div>
+  <input type="file" id="csvFile" accept=".csv">
+  <textarea id="manualInput" rows="5" placeholder="Or paste CSV content here (Time,Concentration)\n0.25,20\n0.5,18\n..."></textarea>
+  <button onclick="analyzeData()">Analyze</button>
   <canvas id="pkChart" width="600" height="400"></canvas>
   <h3>Pharmacokinetic Parameters</h3>
   <table>
+    <thead>
+      <tr><th>Parameter</th><th>Description</th></tr>
+    </thead>
     <tbody id="pkResults"></tbody>
   </table>
 
 <script>
-function analyzePK() {
-  const rawInput = document.getElementById('dataInput').value.trim();
-  const lines = rawInput.split(/\n+/);
-  const time = [], conc = [];
-  lines.forEach(row => {
-    const [t, c] = row.split(',').map(parseFloat);
-    time.push(t);
-    conc.push(c);
-  });
+let pkChart = null;
 
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('csvFile');
+
+['dragover', 'dragenter'].forEach(event => {
+  dropZone.addEventListener(event, e => {
+    e.preventDefault();
+    dropZone.classList.add('dragover');
+  });
+});
+['dragleave', 'drop'].forEach(event => {
+  dropZone.addEventListener(event, e => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+  });
+});
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('drop', e => {
+  const file = e.dataTransfer.files[0];
+  readCSVFile(file);
+});
+fileInput.addEventListener('change', () => {
+  const file = fileInput.files[0];
+  readCSVFile(file);
+});
+
+function analyzeData() {
+  const file = fileInput.files[0];
+  const text = document.getElementById('manualInput').value.trim();
+  if (file) {
+    readCSVFile(file);
+  } else if (text) {
+    parseAndAnalyze(text);
+  } else {
+    alert("Please upload a CSV file or enter data manually.");
+  }
+}
+
+function readCSVFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => parseAndAnalyze(e.target.result);
+  reader.readAsText(file);
+}
+
+function parseAndAnalyze(content) {
+  const lines = content.trim().split(/\n+/);
+  const time = [], conc = [];
+  lines.slice(1).forEach(row => {
+    const [t, c] = row.split(',').map(x => parseFloat(x));
+    if (!isNaN(t) && !isNaN(c)) {
+      time.push(t);
+      conc.push(c);
+    }
+  });
+  if (time.length === 0) {
+    alert("Invalid data format.");
+    return;
+  }
   plotData(time, conc);
   calculatePKParams(time, conc);
 }
 
 function plotData(time, conc) {
   const ctx = document.getElementById('pkChart').getContext('2d');
- if (window.pkChart instanceof Chart) {
-  window.pkChart.destroy();
-}
-  window.pkChart = new Chart(ctx, {
+  if (pkChart instanceof Chart) pkChart.destroy();
+  pkChart = new Chart(ctx, {
     type: 'line',
     data: {
       labels: time,
@@ -66,16 +129,12 @@ function plotData(time, conc) {
 function calculatePKParams(time, conc) {
   let Cmax = Math.max(...conc);
   let Tmax = time[conc.indexOf(Cmax)];
-
-  // AUC via trapezoidal rule
   let AUC = 0;
   for (let i = 1; i < time.length; i++) {
     let dt = time[i] - time[i - 1];
     let avgC = (conc[i] + conc[i - 1]) / 2;
     AUC += dt * avgC;
   }
-
-  // Ke via log-linear regression from terminal phase (last 3 points)
   let n = time.length;
   let t_term = time.slice(n - 3);
   let c_term = conc.slice(n - 3).map(c => Math.log(c));
@@ -91,18 +150,38 @@ function calculatePKParams(time, conc) {
   let tHalf = Math.log(2) / Ke;
 
   const results = [
-    [`Cmax (µg/mL)`, Cmax.toFixed(2)],
-    [`Tmax (hr)`, Tmax],
-    [`AUC (µg·hr/mL)`, AUC.toFixed(2)],
-    [`Ke (1/hr)`, Ke.toFixed(4)],
-    [`t½ (hr)`, tHalf.toFixed(2)]
+    ['Cmax (µg/mL)', 'Peak drug concentration observed', Cmax.toFixed(2)],
+    ['Tmax (hr)', 'Time at which peak plasma level is reached', Tmax],
+    ['AUC₀₋ₜ (µg·hr/mL)', 'Represents drug exposure over time', AUC.toFixed(2)],
+    ['λz (1/hr)', 'Terminal elimination rate constant', Ke.toFixed(4)],
+    ['T½ (hr)', 'Time for plasma concentration to halve', tHalf.toFixed(2)],
+    ['Cl', 'Volume of plasma cleared of drug per unit time', '—'],
+    ['Vd', 'Apparent volume in which the drug is distributed', '—'],
+    ['MRT', 'Average time the drug stays in the body', '—'],
+    ['AUC₀₋∞', 'Extrapolated total drug exposure', '—'],
+    ['AUCbrain/AUCplasma', 'Assesses brain penetration', '—'],
+    ['AUCIV / AUCPO', 'To assess PO bioavailability', '—'],
+    ['Vdss', 'More accurate Vd under steady-state', '—'],
+    ['Clint', 'Hepatic or microsomal clearance rate', '—'],
+    ['F', 'Absolute bioavailability', '—'],
+    ['Kp (brain/plasma)', 'Brain-to-plasma ratio at equilibrium', '—'],
+    ['B/P ratio', 'Used for blood clearance estimations', '—'],
+    ['K_el (Brain)', 'Elimination rate constant from brain', '—'],
+    ['K_el (Liver)', 'Elimination rate constant from liver', '—'],
+    ['Kp,brain', 'Brain penetration ratio', '—'],
+    ['Kp,liver', 'Liver partition ratio', '—'],
+    ['Brain-to-Plasma Cmax ratio', 'Extent of BBB penetration', '—'],
+    ['Brain/plasma ratio @ 1h', 'Point estimate for brain exposure', '—'],
+    ['Liver accumulation ratio', 'C24h liver / Cmax plasma', '—'],
+    ['AUMC', 'Area under moment curve (for MRT, Vss)', '—'],
+    ['MAT', 'Mean absorption time (MRT_PO – MRT_IV)', '—']
   ];
 
-  let table = document.getElementById("pkResults");
+  const table = document.getElementById("pkResults");
   table.innerHTML = "";
-  results.forEach(([name, value]) => {
-    let row = document.createElement("tr");
-    row.innerHTML = `<td><b>${name}</b></td><td>${value}</td>`;
+  results.forEach(([param, desc, value]) => {
+    const row = document.createElement("tr");
+    row.innerHTML = `<td><b>${param}</b><br><small>${desc}</small></td><td>${value}</td>`;
     table.appendChild(row);
   });
 }

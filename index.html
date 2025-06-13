@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PK-Plotter: Pharmacokinetics Calculator</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial; margin: 20px; }
+    input, button, textarea { margin-top: 10px; width: 100%; padding: 8px; }
+    canvas { margin-top: 20px; }
+    table, th, td { border: 1px solid black; border-collapse: collapse; padding: 6px; }
+  </style>
+</head>
+<body>
+  <h2>PK-Plotter: Concentration vs. Time</h2>
+  <label>Enter Time and Concentration (CSV Format - Time,Conc):</label>
+  <textarea id="dataInput" rows="8">0,20\n1,15\n2,10\n4,5\n6,2\n8,1</textarea>
+  <button onclick="analyzePK()">Analyze</button>
+  <canvas id="pkChart" width="600" height="400"></canvas>
+  <h3>Pharmacokinetic Parameters</h3>
+  <table>
+    <tbody id="pkResults"></tbody>
+  </table>
+
+<script>
+function analyzePK() {
+  const rawInput = document.getElementById('dataInput').value.trim();
+  const lines = rawInput.split(/\n+/);
+  const time = [], conc = [];
+  lines.forEach(row => {
+    const [t, c] = row.split(',').map(parseFloat);
+    time.push(t);
+    conc.push(c);
+  });
+
+  plotData(time, conc);
+  calculatePKParams(time, conc);
+}
+
+function plotData(time, conc) {
+  const ctx = document.getElementById('pkChart').getContext('2d');
+ if (window.pkChart instanceof Chart) {
+  window.pkChart.destroy();
+}
+  window.pkChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: time,
+      datasets: [{
+        label: 'Concentration (µg/mL)',
+        data: conc,
+        fill: false,
+        borderColor: 'blue',
+        tension: 0.1
+      }]
+    },
+    options: {
+      scales: {
+        x: { title: { display: true, text: 'Time (hr)' } },
+        y: { title: { display: true, text: 'Concentration (µg/mL)' }, type: 'linear' }
+      }
+    }
+  });
+}
+
+function calculatePKParams(time, conc) {
+  let Cmax = Math.max(...conc);
+  let Tmax = time[conc.indexOf(Cmax)];
+
+  // AUC via trapezoidal rule
+  let AUC = 0;
+  for (let i = 1; i < time.length; i++) {
+    let dt = time[i] - time[i - 1];
+    let avgC = (conc[i] + conc[i - 1]) / 2;
+    AUC += dt * avgC;
+  }
+
+  // Ke via log-linear regression from terminal phase (last 3 points)
+  let n = time.length;
+  let t_term = time.slice(n - 3);
+  let c_term = conc.slice(n - 3).map(c => Math.log(c));
+  let meanX = t_term.reduce((a, b) => a + b) / 3;
+  let meanY = c_term.reduce((a, b) => a + b) / 3;
+  let num = 0, den = 0;
+  for (let i = 0; i < 3; i++) {
+    num += (t_term[i] - meanX) * (c_term[i] - meanY);
+    den += Math.pow(t_term[i] - meanX, 2);
+  }
+  let slope = num / den;
+  let Ke = -slope;
+  let tHalf = Math.log(2) / Ke;
+
+  const results = [
+    [`Cmax (µg/mL)`, Cmax.toFixed(2)],
+    [`Tmax (hr)`, Tmax],
+    [`AUC (µg·hr/mL)`, AUC.toFixed(2)],
+    [`Ke (1/hr)`, Ke.toFixed(4)],
+    [`t½ (hr)`, tHalf.toFixed(2)]
+  ];
+
+  let table = document.getElementById("pkResults");
+  table.innerHTML = "";
+  results.forEach(([name, value]) => {
+    let row = document.createElement("tr");
+    row.innerHTML = `<td><b>${name}</b></td><td>${value}</td>`;
+    table.appendChild(row);
+  });
+}
+</script>
+</body>
+</html>
